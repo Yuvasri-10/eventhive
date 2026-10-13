@@ -1,108 +1,73 @@
+
+Jenkinsfile
 pipeline {
-    agent any
-
-    environment {
-        DOCKER = 'C:\\Users\\yuvas\\AppData\\Local\\Programs\\DockerDesktop\\resources\\bin\\docker.exe'
-        DOCKER_HOST = 'npipe:////./pipe/dockerDesktopLinuxEngine'
-        DOCKER_CONFIG = 'C:\\Users\\yuvas\\.docker'
-        IMAGE_NAME = 'yuvana10/eventhive'
+  agent any
+  options {
+    timestamps()
+    disableConcurrentBuilds()
+  }
+  environment {
+    IMAGE_NAME = 'eventhive'
+    ANSIBLE_HOST_KEY_CHECKING = 'False'   // first SSH connection to the server won't prompt/hang
+    ANSIBLE_FORCE_COLOR = 'true'
+  }
+  stages {
+    stage('Checkout') {
+      steps { checkout scm }
     }
-
-    stages {
-        stage('Checkout') {
-            steps {
-                git branch: 'main',
-                    url: 'https://github.com/Yuvasri-10/eventhive.git'
-            }
-        }
-
-        stage('Install Dependencies') {
-            steps {
-                bat 'npm install'
-            }
-        }
-
-        stage('Test Application') {
-            steps {
-                bat 'node --check server.js'
-            }
-        }
-
-        stage('Build Docker Image') {
-            steps {
-                bat '''
-                    "%DOCKER%" --host "%DOCKER_HOST%" build -t "%IMAGE_NAME%:latest" .
-                '''
-            }
-        }
-
-        stage('Login and Push to Docker Hub') {
-            steps {
-                withCredentials([usernamePassword(
-                    credentialsId: 'dockerhub-creds-new',
-                    usernameVariable: 'DH_USER',
-                    passwordVariable: 'DH_PASS'
-                )]) {
-                    powershell '''
-                        $ErrorActionPreference = 'Stop'
-
-                        $docker = $env:DOCKER
-                        $hostArg = $env:DOCKER_HOST
-                        $image = $env:IMAGE_NAME
-
-                        $psi = New-Object System.Diagnostics.ProcessStartInfo
-                        $psi.FileName = $docker
-                        $psi.Arguments = '--host "' + $hostArg +
-                            '" login --username "' + $env:DH_USER +
-                            '" --password-stdin'
-                        $psi.UseShellExecute = $false
-                        $psi.RedirectStandardInput = $true
-                        $psi.RedirectStandardOutput = $true
-                        $psi.RedirectStandardError = $true
-                        $psi.CreateNoWindow = $true
-
-                        $p = New-Object System.Diagnostics.Process
-                        $p.StartInfo = $psi
-                        [void]$p.Start()
-
-                        $p.StandardInput.WriteLine($env:DH_PASS)
-                        $p.StandardInput.Close()
-
-                        $outTask = $p.StandardOutput.ReadToEndAsync()
-                        $errTask = $p.StandardError.ReadToEndAsync()
-                        $p.WaitForExit()
-
-                        $out = $outTask.Result
-                        $err = $errTask.Result
-
-                        if ($out) { Write-Output $out.Trim() }
-                        if ($err) { Write-Output $err.Trim() }
-
-                        if ($p.ExitCode -ne 0) {
-                            throw 'Docker Hub login failed. Push was not attempted.'
-                        }
-
-                        $p.Dispose()
-
-                        & $docker --host $hostArg push "${image}:latest"
-
-                        if ($LASTEXITCODE -ne 0) {
-                            throw 'Docker image push failed.'
-                        }
-
-                        Write-Output 'SUCCESS: Docker image pushed to Docker Hub.'
-                    '''
-                }
-            }
-        }
+    stage('Install and test') {
+      steps {
+        sh 'node --version && docker --version && ansible-playbook --version | head -1'
+        sh 'npm install'
+        sh 'npm test'
+      }
     }
-
-    post {
-        success {
-            echo 'EventHive pipeline completed successfully.'
-        }
-        failure {
-            echo 'Pipeline failed. Check the first failing stage in Console Output.'
-        }
+    stage('Build Docker image') {
+      steps {
+        sh 'docker build -t ${IMAGE_NAME}:${BUILD_NUMBER} .'
+      }
     }
+    stage('Login and push to Docker Hub') {
+      when { expression { env.BRANCH_NAME == 'main' || env.GIT_BRANCH == 'origin/main' || env.GIT_BRANCH == 'main' } }
+      steps {
+        withCredentials([usernamePassword(credentialsId: 'dockerhub-credentials',
+          usernameVariable: 'DOCKERHUB_USERNAME', passwordVariable: 'DOCKERHUB_TOKEN')]) {
+          sh '''
+            echo "$DOCKERHUB_TOKEN" | docker login -u "$DOCKERHUB_USERNAME" --password-stdin
+            docker tag eventhive:${BUILD_NUMBER} "$DOCKERHUB_USERNAME/eventhive:${BUILD_NUMBER}"
+            docker tag eventhive:${BUILD_NUMBER} "$DOCKERHUB_USERNAME/eventhive:latest"
+            docker push "$DOCKERHUB_USERNAME/eventhive:${BUILD_NUMBER}"
+            docker push "$DOCKERHUB_USERNAME/eventhive:latest"
+            docker logout
+          '''
+        }
+      }
+    }
+    stage('Deploy with Ansible') {
+      // Skipped automatically until DEPLOY_HOST is set in Jenkins (and the SSH credential exists)
+      when { expression { (env.BRANCH_NAME == 'main' || env.GIT_BRANCH == 'origin/main' || env.GIT_BRANCH == 'main') && env.DEPLOY_HOST?.trim() } }
+      steps {
+        withCredentials([
+          usernamePassword(credentialsId: 'dockerhub-credentials',
+            usernameVariable: 'DOCKERHUB_USERNAME', passwordVariable: 'DOCKERHUB_TOKEN'),
+          sshUserPrivateKey(credentialsId: 'eventhive-deploy-ssh',
+            keyFileVariable: 'DEPLOY_KEY', usernameVariable: 'DEPLOY_USER'),
+          string(credentialsId: 'eventhive-jwt-secret', variable: 'EVENTHIVE_JWT_SECRET')
+        ]) {
+          sh '''
+            test -n "$DEPLOY_HOST" || (echo "Set DEPLOY_HOST: Manage Jenkins > System > Global properties > Environment variables" && exit 1)
+            ansible-playbook -i "$DEPLOY_HOST," ansible/deploy.yml \\
+              --user "$DEPLOY_USER" --private-key "$DEPLOY_KEY" \\
+              -e "dockerhub_username=$DOCKERHUB_USERNAME image_tag=$BUILD_NUMBER"
+          '''
+        }
+      }
+    }
+  }
+  post {
+    success { echo env.DEPLOY_HOST?.trim() ? "Deployed build ${BUILD_NUMBER}. Check http://${env.DEPLOY_HOST}:3000/health" : "Pushed build ${BUILD_NUMBER} to Docker Hub (deploy skipped: DEPLOY_HOST not set)." }
+    always  { sh 'docker image rm eventhive:${BUILD_NUMBER} 2>/dev/null || true' }
+  }
 }
+ 
+Claude finished the response
