@@ -2,167 +2,106 @@
 pipeline {
     agent any
 
-    options {
-        timestamps()
-        disableConcurrentBuilds()
-        buildDiscarder(logRotator(numToKeepStr: '10'))
-    }
-
-    triggers {
-        githubPush()
-    }
-
-    parameters {
-        choice(
-            name: 'DEPLOY_ENV',
-            choices: ['production', 'local'],
-            description: 'Environment for Ansible deployment'
-        )
-
-        booleanParam(
-            name: 'SKIP_DEPLOY',
-            defaultValue: true,
-            description: 'Skip Ansible deployment on the Windows Jenkins controller'
-        )
-    }
-
     environment {
-        IMAGE_NAME = 'yuvana10/eventhive'
         DOCKER = 'C:\\Users\\yuvas\\AppData\\Local\\Programs\\DockerDesktop\\resources\\bin\\docker.exe'
-        DOCKER_HOST = 'npipe:////./pipe/docker_engine'
+        DOCKER_HOST = 'npipe:////./pipe/dockerDesktopLinuxEngine'
+        IMAGE_NAME = 'yuvana10/eventhive'
     }
 
     stages {
         stage('Checkout') {
             steps {
-                checkout scm
-
-                script {
-                    def gitCommit = bat(
-                        returnStdout: true,
-                        script: '@git rev-parse --short HEAD'
-                    ).trim()
-
-                    env.IMAGE_TAG = "${env.BUILD_NUMBER}-${gitCommit}"
-                }
-
-                echo "Building ${env.IMAGE_NAME}:${env.IMAGE_TAG}"
+                git branch: 'main',
+                    url: 'https://github.com/Yuvasri-10/eventhive.git'
             }
         }
 
-        stage('Install and Test') {
+        stage('Install Dependencies') {
             steps {
-                bat 'node --version'
-                bat 'npm --version'
                 bat 'npm install'
-                bat 'npm test'
+            }
+        }
+
+        stage('Test Application') {
+            steps {
+                bat 'node --check server.js'
             }
         }
 
         stage('Build Docker Image') {
             steps {
-                bat '"%DOCKER%" --host "%DOCKER_HOST%" build -t %IMAGE_NAME%:%IMAGE_TAG% -t %IMAGE_NAME%:latest .'
+                bat '''
+                    "%DOCKER%" --host "%DOCKER_HOST%" build -t "%IMAGE_NAME%:latest" .
+                '''
             }
         }
 
-        stage('Push to Docker Hub') {
-            when {
-                expression {
-                    (env.GIT_BRANCH ?: env.BRANCH_NAME ?: '')
-                        .replace('origin/', '') == 'main'
-                }
-            }
-
+        stage('Login and Push to Docker Hub') {
             steps {
-                withCredentials([
-                    usernamePassword(
-                        credentialsId: 'dockerhub-creds',
-                        usernameVariable: 'DH_USER',
-                        passwordVariable: 'DH_PASS'
-                    )
-                ]) {
+                withCredentials([usernamePassword(
+                    credentialsId: 'dockerhub-creds-new',
+                    usernameVariable: 'DH_USER',
+                    passwordVariable: 'DH_PASS'
+                )]) {
                     powershell '''
                         $ErrorActionPreference = 'Stop'
 
-                        if ([string]::IsNullOrWhiteSpace($env:DH_USER) -or
-                            [string]::IsNullOrEmpty($env:DH_PASS)) {
-                            throw "Docker Hub credentials are empty."
+                        $docker = $env:DOCKER
+                        $hostArg = $env:DOCKER_HOST
+                        $image = $env:IMAGE_NAME
+
+                        $psi = New-Object System.Diagnostics.ProcessStartInfo
+                        $psi.FileName = $docker
+                        $psi.Arguments = '--host "' + $hostArg +
+                            '" login --username "' + $env:DH_USER +
+                            '" --password-stdin'
+                        $psi.UseShellExecute = $false
+                        $psi.RedirectStandardInput = $true
+                        $psi.RedirectStandardOutput = $true
+                        $psi.RedirectStandardError = $true
+                        $psi.CreateNoWindow = $true
+
+                        $p = New-Object System.Diagnostics.Process
+                        $p.StartInfo = $psi
+                        [void]$p.Start()
+
+                        $p.StandardInput.WriteLine($env:DH_PASS)
+                        $p.StandardInput.Close()
+
+                        $outTask = $p.StandardOutput.ReadToEndAsync()
+                        $errTask = $p.StandardError.ReadToEndAsync()
+                        $p.WaitForExit()
+
+                        $out = $outTask.Result
+                        $err = $errTask.Result
+
+                        if ($out) { Write-Output $out.Trim() }
+                        if ($err) { Write-Output $err.Trim() }
+
+                        if ($p.ExitCode -ne 0) {
+                            throw "Docker Hub login failed. Image push was not attempted."
                         }
 
-                        # Use the Docker engine pipe verified from Jenkins.
-                        $env:DH_PASS |
-                            & $env:DOCKER `
-                                --host $env:DOCKER_HOST `
-                                login `
-                                --username $env:DH_USER `
-                                --password-stdin
+                        $p.Dispose()
 
+                        & $docker --host $hostArg push "${image}:latest"
                         if ($LASTEXITCODE -ne 0) {
-                            throw "Docker Hub login failed."
+                            throw "Docker image push failed."
                         }
 
-                        Write-Output "Docker Hub login succeeded."
-
-                        # Push the build-specific image.
-                        & $env:DOCKER `
-                            --host $env:DOCKER_HOST `
-                            push "$env:IMAGE_NAME`:$env:IMAGE_TAG"
-
-                        if ($LASTEXITCODE -ne 0) {
-                            throw "Failed to push the build-tagged image."
-                        }
-
-                        # Push the latest tag.
-                        & $env:DOCKER `
-                            --host $env:DOCKER_HOST `
-                            push "$env:IMAGE_NAME`:latest"
-
-                        if ($LASTEXITCODE -ne 0) {
-                            throw "Failed to push the latest image."
-                        }
-
-                        Write-Output "Both Docker images were pushed successfully."
+                        Write-Output "SUCCESS: Docker image pushed to Docker Hub."
                     '''
                 }
-            }
-        }
-
-        stage('Deploy with Ansible') {
-            when {
-                allOf {
-                    expression {
-                        (env.GIT_BRANCH ?: env.BRANCH_NAME ?: '')
-                            .replace('origin/', '') == 'main'
-                    }
-
-                    expression {
-                        !params.SKIP_DEPLOY
-                    }
-                }
-            }
-
-            steps {
-                echo 'Ansible deployment is not configured for this Windows Jenkins controller.'
-                error('Deployment requires a configured Linux or WSL agent.')
             }
         }
     }
 
     post {
-        always {
-            powershell '''
-                $ErrorActionPreference = 'Continue'
-                & $env:DOCKER --host $env:DOCKER_HOST logout
-                exit 0
-            '''
-        }
-
         success {
-            echo "Pipeline completed for ${env.IMAGE_NAME}:${env.IMAGE_TAG}"
+            echo 'EventHive pipeline completed successfully.'
         }
-
         failure {
-            echo 'Pipeline failed. Check the stage logs above for the exact error.'
+            echo 'Pipeline failed. Check the first failing stage in Console Output.'
         }
     }
 }
