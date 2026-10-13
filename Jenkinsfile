@@ -3,7 +3,8 @@ pipeline {
 
     environment {
         DOCKER = 'C:\\Users\\yuvas\\AppData\\Local\\Programs\\DockerDesktop\\resources\\bin\\docker.exe'
-        DOCKER_CONTEXT = 'desktop-linux'
+        DOCKER_HOST = 'npipe:////./pipe/dockerDesktopLinuxEngine'
+        DOCKER_CONFIG = 'C:\\Users\\yuvas\\.docker'
         IMAGE_NAME = 'yuvana10/eventhive'
     }
 
@@ -30,7 +31,7 @@ pipeline {
         stage('Build Docker Image') {
             steps {
                 bat '''
-                    "%DOCKER%" --context "%DOCKER_CONTEXT%" build -t "%IMAGE_NAME%:latest" .
+                    "%DOCKER%" --host "%DOCKER_HOST%" build -t "%IMAGE_NAME%:latest" .
                 '''
             }
         }
@@ -46,12 +47,12 @@ pipeline {
                         $ErrorActionPreference = 'Stop'
 
                         $docker = $env:DOCKER
-                        $context = $env:DOCKER_CONTEXT
+                        $hostArg = $env:DOCKER_HOST
                         $image = $env:IMAGE_NAME
 
                         $psi = New-Object System.Diagnostics.ProcessStartInfo
                         $psi.FileName = $docker
-                        $psi.Arguments = '--context "' + $context +
+                        $psi.Arguments = '--host "' + $hostArg +
                             '" login --username "' + $env:DH_USER +
                             '" --password-stdin'
                         $psi.UseShellExecute = $false
@@ -83,7 +84,7 @@ pipeline {
 
                         $p.Dispose()
 
-                        & $docker --context $context push "${image}:latest"
+                        & $docker --host $hostArg push "${image}:latest"
 
                         if ($LASTEXITCODE -ne 0) {
                             throw 'Docker image push failed.'
