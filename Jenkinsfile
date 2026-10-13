@@ -1,10 +1,9 @@
-
 pipeline {
     agent any
 
     environment {
         DOCKER = 'C:\\Users\\yuvas\\AppData\\Local\\Programs\\DockerDesktop\\resources\\bin\\docker.exe'
-        DOCKER_HOST = 'npipe:////./pipe/dockerDesktopLinuxEngine'
+        DOCKER_CONTEXT = 'desktop-linux'
         IMAGE_NAME = 'yuvana10/eventhive'
     }
 
@@ -31,7 +30,7 @@ pipeline {
         stage('Build Docker Image') {
             steps {
                 bat '''
-                    "%DOCKER%" --host "%DOCKER_HOST%" build -t "%IMAGE_NAME%:latest" .
+                    "%DOCKER%" --context "%DOCKER_CONTEXT%" build -t "%IMAGE_NAME%:latest" .
                 '''
             }
         }
@@ -47,12 +46,12 @@ pipeline {
                         $ErrorActionPreference = 'Stop'
 
                         $docker = $env:DOCKER
-                        $hostArg = $env:DOCKER_HOST
+                        $context = $env:DOCKER_CONTEXT
                         $image = $env:IMAGE_NAME
 
                         $psi = New-Object System.Diagnostics.ProcessStartInfo
                         $psi.FileName = $docker
-                        $psi.Arguments = '--host "' + $hostArg +
+                        $psi.Arguments = '--context "' + $context +
                             '" login --username "' + $env:DH_USER +
                             '" --password-stdin'
                         $psi.UseShellExecute = $false
@@ -79,17 +78,18 @@ pipeline {
                         if ($err) { Write-Output $err.Trim() }
 
                         if ($p.ExitCode -ne 0) {
-                            throw "Docker Hub login failed. Image push was not attempted."
+                            throw 'Docker Hub login failed. Push was not attempted.'
                         }
 
                         $p.Dispose()
 
-                        & $docker --host $hostArg push "${image}:latest"
+                        & $docker --context $context push "${image}:latest"
+
                         if ($LASTEXITCODE -ne 0) {
-                            throw "Docker image push failed."
+                            throw 'Docker image push failed.'
                         }
 
-                        Write-Output "SUCCESS: Docker image pushed to Docker Hub."
+                        Write-Output 'SUCCESS: Docker image pushed to Docker Hub.'
                     '''
                 }
             }
