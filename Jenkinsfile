@@ -28,7 +28,8 @@ pipeline {
   environment {
     IMAGE_NAME = 'yuvana10/eventhive'
     ANSIBLE_FORCE_COLOR = 'true'
-  }
+    DOCKER = 'C:\\Users\\yuvas\\AppData\\Local\\Programs\\DockerDesktop\\resources\\bin\\docker.exe'
+}
 
   stages {
     stage('Checkout') {
@@ -51,10 +52,10 @@ pipeline {
     }
 
     stage('Build Docker Image') {
-      steps {
-        bat 'docker build -t %IMAGE_NAME%:%IMAGE_TAG% -t %IMAGE_NAME%:latest .'
-      }
+    steps {
+        bat '"%DOCKER%" build -t %IMAGE_NAME%:%IMAGE_TAG% -t %IMAGE_NAME%:latest .'
     }
+}
 
     stage('Push to Docker Hub') {
       when {
@@ -71,15 +72,17 @@ pipeline {
           )
         ]) {
           powershell '''
-            $ErrorActionPreference = 'Stop'
-            $env:DH_PASS | docker login --username $env:DH_USER --password-stdin
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    $ErrorActionPreference = 'Stop'
+    $docker = $env:DOCKER
 
-            docker push "$env:IMAGE_NAME`:$env:IMAGE_TAG"
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    $env:DH_PASS | & $docker login --username $env:DH_USER --password-stdin
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-            docker push "$env:IMAGE_NAME`:latest"
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    & $docker push "$env:IMAGE_NAME`:$env:IMAGE_TAG"
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+    & $docker push "$env:IMAGE_NAME`:latest"
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           '''
         }
       }
@@ -103,7 +106,7 @@ pipeline {
 
   post {
     always {
-      bat 'docker logout || exit /b 0'
+      bat '"%DOCKER%" logout || exit /b 0'
     }
     success {
       echo "Pipeline completed for ${env.IMAGE_NAME}:${env.IMAGE_TAG}"
