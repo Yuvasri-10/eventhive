@@ -37,12 +37,13 @@ pipeline {
                 checkout scm
 
                 script {
-                    env.IMAGE_TAG = "${env.BUILD_NUMBER}-${bat(
-                        returnStdout: true,
-                        script: '@git rev-parse --short HEAD'
-                    ).trim()}"
-                }
+                   def gitCommit = bat(
+                returnStdout: true,
+                script: '@git rev-parse --short HEAD'
+            ).trim()
 
+            env.IMAGE_TAG = "${env.BUILD_NUMBER}-${gitCommit}"
+        }
                 echo "Building ${env.IMAGE_NAME}:${env.IMAGE_TAG}"
             }
         }
