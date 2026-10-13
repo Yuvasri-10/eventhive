@@ -37,13 +37,14 @@ pipeline {
                 checkout scm
 
                 script {
-                   def gitCommit = bat(
-                returnStdout: true,
-                script: '@git rev-parse --short HEAD'
-            ).trim()
+                    def gitCommit = bat(
+                        returnStdout: true,
+                        script: '@git rev-parse --short HEAD'
+                    ).trim()
 
-            env.IMAGE_TAG = "${env.BUILD_NUMBER}-${gitCommit}"
-        }
+                    env.IMAGE_TAG = "${env.BUILD_NUMBER}-${gitCommit}"
+                }
+
                 echo "Building ${env.IMAGE_NAME}:${env.IMAGE_TAG}"
             }
         }
@@ -79,8 +80,6 @@ pipeline {
                         passwordVariable: 'DH_PASS'
                     )
                 ]) {
-                    echo "Docker Hub username supplied to Jenkins: ${env.DH_USER}"
-
                     powershell '''
                         $ErrorActionPreference = 'Stop'
 
@@ -88,6 +87,8 @@ pipeline {
                             [string]::IsNullOrEmpty($env:DH_PASS)) {
                             throw "Docker Hub credentials are empty."
                         }
+
+                        $password = $env:DH_PASS.Trim()
 
                         $psi = New-Object System.Diagnostics.ProcessStartInfo
                         $psi.FileName = $env:DOCKER
@@ -105,19 +106,26 @@ pipeline {
                         $stdoutTask = $proc.StandardOutput.ReadToEndAsync()
                         $stderrTask = $proc.StandardError.ReadToEndAsync()
 
-                        $proc.StandardInput.WriteLine($env:DH_PASS)
+                        $proc.StandardInput.WriteLine($password)
                         $proc.StandardInput.Close()
                         $proc.WaitForExit()
 
                         $stdout = $stdoutTask.Result
                         $stderr = $stderrTask.Result
 
-                        if ($stdout) { Write-Output $stdout }
-                        if ($stderr) { Write-Output $stderr }
+                        if ($stdout) {
+                            Write-Output $stdout
+                        }
+
+                        if ($stderr) {
+                            Write-Output $stderr
+                        }
 
                         if ($proc.ExitCode -ne 0) {
-                            throw "Docker Hub login failed. Verify dockerhub-creds in Jenkins."
+                            throw "Docker Hub login failed. Check the Jenkins credential."
                         }
+
+                        Write-Output "Docker Hub login succeeded."
 
                         & $env:DOCKER push "$env:IMAGE_NAME`:$env:IMAGE_TAG"
                         if ($LASTEXITCODE -ne 0) {
