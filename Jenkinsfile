@@ -1,118 +1,167 @@
 
 pipeline {
-  agent any
+    agent any
 
-  options {
-    timestamps()
-    disableConcurrentBuilds()
-    buildDiscarder(logRotator(numToKeepStr: '10'))
-  }
+    options {
+        timestamps()
+        disableConcurrentBuilds()
+        buildDiscarder(logRotator(numToKeepStr: '10'))
+    }
 
-  triggers {
-    githubPush()
-  }
+    triggers {
+        githubPush()
+    }
 
-  parameters {
-    choice(
-      name: 'DEPLOY_ENV',
-      choices: ['production', 'local'],
-      description: 'Environment for Ansible deployment'
-    )
-    booleanParam(
-      name: 'SKIP_DEPLOY',
-      defaultValue: true,
-      description: 'Skip Ansible deployment on the Windows Jenkins controller'
-    )
-  }
+    parameters {
+        choice(
+            name: 'DEPLOY_ENV',
+            choices: ['production', 'local'],
+            description: 'Environment for Ansible deployment'
+        )
 
-  environment {
-    IMAGE_NAME = 'yuvana10/eventhive'
-    ANSIBLE_FORCE_COLOR = 'true'
-    DOCKER = 'C:\\Users\\yuvas\\AppData\\Local\\Programs\\DockerDesktop\\resources\\bin\\docker.exe'
-}
+        booleanParam(
+            name: 'SKIP_DEPLOY',
+            defaultValue: true,
+            description: 'Skip Ansible deployment on the Windows Jenkins controller'
+        )
+    }
 
-  stages {
-    stage('Checkout') {
-      steps {
-        checkout scm
-        script {
-          env.IMAGE_TAG = "${env.BUILD_NUMBER}-${bat(returnStdout: true, script: '@git rev-parse --short HEAD').trim()}"
+    environment {
+        IMAGE_NAME = 'yuvana10/eventhive'
+        DOCKER = 'C:\\Users\\yuvas\\AppData\\Local\\Programs\\DockerDesktop\\resources\\bin\\docker.exe'
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                checkout scm
+
+                script {
+                    env.IMAGE_TAG = "${env.BUILD_NUMBER}-${bat(
+                        returnStdout: true,
+                        script: '@git rev-parse --short HEAD'
+                    ).trim()}"
+                }
+
+                echo "Building ${env.IMAGE_NAME}:${env.IMAGE_TAG}"
+            }
         }
-        echo "Building ${env.IMAGE_NAME}:${env.IMAGE_TAG}"
-      }
-    }
 
-    stage('Install and Test') {
-      steps {
-        bat 'node --version'
-        bat 'npm --version'
-        bat 'npm install'
-        bat 'npm test'
-      }
-    }
-
-    stage('Build Docker Image') {
-    steps {
-        bat '"%DOCKER%" build -t %IMAGE_NAME%:%IMAGE_TAG% -t %IMAGE_NAME%:latest .'
-    }
-}
-
-    stage('Push to Docker Hub') {
-      when {
-        expression {
-          (env.GIT_BRANCH ?: env.BRANCH_NAME ?: '').replace('origin/', '') == 'main'
+        stage('Install and Test') {
+            steps {
+                bat 'node --version'
+                bat 'npm --version'
+                bat 'npm install'
+                bat 'npm test'
+            }
         }
-      }
-      steps {
-        withCredentials([
-          usernamePassword(
-            credentialsId: 'dockerhub-creds',
-            usernameVariable: 'DH_USER',
-            passwordVariable: 'DH_PASS'
-          )
-        ]) {
-          powershell '''
-    $ErrorActionPreference = 'Stop'
-    $docker = $env:DOCKER
 
-    $env:DH_PASS | & $docker login --username $env:DH_USER --password-stdin
-    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-    & $docker push "$env:IMAGE_NAME`:$env:IMAGE_TAG"
-    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-    & $docker push "$env:IMAGE_NAME`:latest"
-    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          '''
+        stage('Build Docker Image') {
+            steps {
+                bat '"%DOCKER%" build -t %IMAGE_NAME%:%IMAGE_TAG% -t %IMAGE_NAME%:latest .'
+            }
         }
-      }
-    }
 
-    stage('Deploy with Ansible') {
-      when {
-        allOf {
-          expression {
-            (env.GIT_BRANCH ?: env.BRANCH_NAME ?: '').replace('origin/', '') == 'main'
-          }
-          expression { !params.SKIP_DEPLOY }
+        stage('Push to Docker Hub') {
+            when {
+                expression {
+                    (env.GIT_BRANCH ?: env.BRANCH_NAME ?: '')
+                        .replace('origin/', '') == 'main'
+                }
+            }
+
+            steps {
+                withCredentials([
+                    usernamePassword(
+                        credentialsId: 'dockerhub-creds',
+                        usernameVariable: 'DH_USER',
+                        passwordVariable: 'DH_PASS'
+                    )
+                ]) {
+                    powershell '''
+                        $ErrorActionPreference = 'Stop'
+
+                        if ([string]::IsNullOrWhiteSpace($env:DH_USER) -or
+                            [string]::IsNullOrEmpty($env:DH_PASS)) {
+                            throw "Docker Hub credentials are empty."
+                        }
+
+                        $psi = New-Object System.Diagnostics.ProcessStartInfo
+                        $psi.FileName = $env:DOCKER
+                        $psi.Arguments = "login --username `"$env:DH_USER`" --password-stdin"
+                        $psi.UseShellExecute = $false
+                        $psi.CreateNoWindow = $true
+                        $psi.RedirectStandardInput = $true
+                        $psi.RedirectStandardOutput = $true
+                        $psi.RedirectStandardError = $true
+
+                        $proc = New-Object System.Diagnostics.Process
+                        $proc.StartInfo = $psi
+                        [void]$proc.Start()
+
+                        $stdoutTask = $proc.StandardOutput.ReadToEndAsync()
+                        $stderrTask = $proc.StandardError.ReadToEndAsync()
+
+                        $proc.StandardInput.WriteLine($env:DH_PASS)
+                        $proc.StandardInput.Close()
+                        $proc.WaitForExit()
+
+                        $stdout = $stdoutTask.Result
+                        $stderr = $stderrTask.Result
+
+                        if ($stdout) { Write-Output $stdout }
+                        if ($stderr) { Write-Output $stderr }
+
+                        if ($proc.ExitCode -ne 0) {
+                            throw "Docker Hub login failed. Verify dockerhub-creds in Jenkins."
+                        }
+
+                        & $env:DOCKER push "$env:IMAGE_NAME`:$env:IMAGE_TAG"
+                        if ($LASTEXITCODE -ne 0) {
+                            throw "Failed to push the build-tagged image."
+                        }
+
+                        & $env:DOCKER push "$env:IMAGE_NAME`:latest"
+                        if ($LASTEXITCODE -ne 0) {
+                            throw "Failed to push the latest image."
+                        }
+                    '''
+                }
+            }
         }
-      }
-      steps {
-        echo 'Ansible deployment requires a configured Linux agent or WSL environment. Configure that environment before enabling this stage.'
-        error('Deployment not configured for the Windows Jenkins controller.')
-      }
-    }
-  }
 
-  post {
-    always {
-      bat '"%DOCKER%" logout || exit /b 0'
+        stage('Deploy with Ansible') {
+            when {
+                allOf {
+                    expression {
+                        (env.GIT_BRANCH ?: env.BRANCH_NAME ?: '')
+                            .replace('origin/', '') == 'main'
+                    }
+
+                    expression {
+                        !params.SKIP_DEPLOY
+                    }
+                }
+            }
+
+            steps {
+                echo 'Ansible deployment is not configured for this Windows Jenkins controller.'
+                error('Deployment requires a configured Linux or WSL agent.')
+            }
+        }
     }
-    success {
-      echo "Pipeline completed for ${env.IMAGE_NAME}:${env.IMAGE_TAG}"
+
+    post {
+        always {
+            bat '"%DOCKER%" logout || exit /b 0'
+        }
+
+        success {
+            echo "Pipeline completed for ${env.IMAGE_NAME}:${env.IMAGE_TAG}"
+        }
+
+        failure {
+            echo 'Pipeline failed. Check the stage logs above for the exact error.'
+        }
     }
-    failure {
-      echo 'Pipeline failed - check the stage logs.'
-    }
-  }
 }
