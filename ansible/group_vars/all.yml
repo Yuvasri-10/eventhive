@@ -1,0 +1,13 @@
+app_dir: /opt/eventhive
+app_port: 3000
+grafana_port: 3001
+prometheus_port: 9090
+
+# Values below are injected by Jenkins as environment variables
+image_name: "{{ lookup('env', 'IMAGE_NAME') | default('yuvana10/eventhive', true) }}"
+image_tag: "{{ lookup('env', 'IMAGE_TAG') | default('latest', true) }}"
+jwt_secret: "{{ lookup('env', 'JWT_SECRET') }}"
+grafana_admin_password: "{{ lookup('env', 'GRAFANA_ADMIN_PASSWORD') | default('admin', true) }}"
+
+install_docker: true
+use_become: true

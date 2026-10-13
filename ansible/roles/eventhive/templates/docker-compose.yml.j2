@@ -1,0 +1,29 @@
+# Managed by Ansible - do not edit by hand
+services:
+  mongo:
+    image: mongo:7
+    restart: unless-stopped
+    volumes: [mongo-data:/data/db]
+  app:
+    image: {{ image_name }}:{{ image_tag }}
+    container_name: eventhive-app
+    restart: unless-stopped
+    ports: ["{{ app_port }}:3000"]
+    environment:
+      MONGO_URL: mongodb://mongo:27017/eventhive
+      JWT_SECRET: "{{ jwt_secret }}"
+    depends_on: [mongo]
+  prometheus:
+    image: prom/prometheus
+    restart: unless-stopped
+    volumes: ["{{ app_dir }}/prometheus.yml:/etc/prometheus/prometheus.yml:ro"]
+    ports: ["{{ prometheus_port }}:9090"]
+  grafana:
+    image: grafana/grafana
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: "{{ grafana_admin_password }}"
+    ports: ["{{ grafana_port }}:3000"]
+    depends_on: [prometheus]
+volumes:
+  mongo-data:

@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>EventHive</title>
+<style>
+:root{--p:#6c5ce7;--p2:#a29bfe;--bg:#f4f5fb;--card:#fff;--tx:#2d3436;--mut:#8395a7;--ok:#00b894;--bad:#e17055;--warn:#fdcb6e}
+*{box-sizing:border-box;margin:0;font-family:'Segoe UI',system-ui,sans-serif}
+body{background:var(--bg);color:var(--tx);min-height:100vh}
+nav{background:linear-gradient(90deg,var(--p),var(--p2));color:#fff;padding:14px 28px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;position:sticky;top:0;z-index:5;box-shadow:0 2px 12px #6c5ce755}
+nav .logo{font-size:22px;font-weight:800;margin-right:auto;cursor:pointer}
+nav a{color:#fff;text-decoration:none;padding:8px 14px;border-radius:20px;font-weight:600;font-size:14px;cursor:pointer}
+nav a:hover,nav a.on{background:#ffffff33}
+main{max-width:1000px;margin:28px auto;padding:0 18px}
+h2{margin-bottom:18px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:18px}
+.card{background:var(--card);border-radius:16px;padding:20px;box-shadow:0 4px 18px #0000000d;transition:.2s}
+.grid .card:hover{transform:translateY(-4px);box-shadow:0 8px 24px #6c5ce722}
+.card h3{margin-bottom:6px}.mut{color:var(--mut);font-size:14px;margin:3px 0}
+button{background:var(--p);color:#fff;border:0;padding:11px 18px;border-radius:10px;font-weight:700;cursor:pointer;font-size:14px}
+button:hover{opacity:.9}button:disabled{background:#ccc;cursor:not-allowed}
+input{width:100%;padding:12px;border:2px solid #e6e8f0;border-radius:10px;margin-bottom:12px;font-size:14px}
+input:focus{outline:0;border-color:var(--p2)}
+.auth{max-width:400px;margin:40px auto}.auth h2{text-align:center}
+.link{color:var(--p);cursor:pointer;font-weight:600;text-align:center;display:block;margin-top:12px;font-size:14px}
+.bar{height:10px;background:#eceef6;border-radius:6px;margin:10px 0 4px;overflow:hidden}
+.bar i{display:block;height:100%;background:linear-gradient(90deg,var(--p),var(--p2))}
+.tag{display:inline-block;padding:3px 10px;border-radius:12px;font-size:12px;font-weight:700}
+.t-ok{background:#d5f5ec;color:var(--ok)}.t-used{background:#eee;color:#888}
+.tk{display:flex;gap:16px;align-items:center}.tk img{border-radius:10px;border:1px solid #eee}
+.tid{font-family:monospace;font-size:18px;font-weight:800;color:var(--p);letter-spacing:1px}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:18px;margin-bottom:22px}
+.stat{color:#fff;border-radius:16px;padding:22px}.stat b{font-size:38px;display:block}
+.s1{background:linear-gradient(135deg,#6c5ce7,#a29bfe)}.s2{background:linear-gradient(135deg,#00b894,#55efc4)}.s3{background:linear-gradient(135deg,#e17055,#fab1a0)}
+.two{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:18px}
+.res{padding:18px;border-radius:12px;margin-top:14px;font-weight:700;text-align:center}
+.res.valid{background:#d5f5ec;color:#00785f}.res.invalid{background:#ffe3dc;color:#b33a20}.res.used{background:#fff3cd;color:#8a6d00}
+#toast{position:fixed;bottom:24px;right:24px;background:var(--tx);color:#fff;padding:14px 22px;border-radius:12px;opacity:0;transition:.3s;pointer-events:none;z-index:9}
+#toast.show{opacity:1}
+.empty{text-align:center;color:var(--mut);padding:40px}
+</style></head><body>
+<nav id="nav"></nav><main id="app"></main><div id="toast"></div>
+<script>
+let token=localStorage.token||'',user=JSON.parse(localStorage.user||'null');
+const $=s=>document.querySelector(s),app=$('#app');
+const toast=m=>{const t=$('#toast');t.textContent=m;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2600)};
+async function api(p,method='GET',body){
+  const r=await fetch('/api'+p,{method,headers:{'Content-Type':'application/json',Authorization:'Bearer '+token},body:body&&JSON.stringify(body)});
+  const d=await r.json();if(r.status==401){logout(true)}if(!r.ok)throw new Error(d.error||'Error');return d}
+function logout(silent){token='';user=null;localStorage.clear();location.hash='#/login';if(!silent)toast('Logged out')}
+const fmt=d=>new Date(d).toLocaleString([],{dateStyle:'medium',timeStyle:'short'});
+
+function navbar(){
+  const r=location.hash||'#/login',l=(h,t)=>`<a href="${h}" class="${r==h?'on':''}">${t}</a>`;
+  $('#nav').innerHTML=`<span class="logo" onclick="location.hash='#/events'">🐝 EventHive</span>`+(user?
+    l('#/events','Events')+(user.role=='admin'?l('#/admin','Admin')+l('#/dashboard','Dashboard'):l('#/tickets','My Tickets'))+
+    `<a onclick="logout()">Logout (${user.name})</a>`:'')}
+
+const routes={
+ '#/login':()=>authView(),
+ '#/events':async()=>{
+  const ev=await api('/events');
+  app.innerHTML='<h2>Upcoming Events</h2>'+(ev.length?`<div class="grid">${ev.map(e=>{const left=e.seats-e.booked;return `<div class="card">
+   <h3>${e.name}</h3><p class="mut">📅 ${fmt(e.date)}</p><p class="mut">📍 ${e.venue||'TBA'}</p>
+   <div class="bar"><i style="width:${e.booked/e.seats*100}%"></i></div><p class="mut">${left} of ${e.seats} seats left</p><br>
+   ${user.role=='admin'?'':`<button ${left?'':'disabled'} onclick="book('${e._id}')">${left?'Book Now':'Sold Out'}</button>`}</div>`}).join('')}</div>`:'<div class="empty">No events yet.</div>')},
+ '#/tickets':async()=>{
+  const t=await api('/my-tickets');
+  app.innerHTML='<h2>My Tickets</h2>'+(t.length?`<div class="grid">${t.map(x=>`<div class="card tk"><img src="${x.qr}" width="110">
+   <div><h3>${x.event.name}</h3><p class="mut">${fmt(x.event.date)}</p><div class="tid">${x.ticketId}</div>
+   <span class="tag ${x.used?'t-used':'t-ok'}">${x.used?'Used':'Valid'}</span></div></div>`).join('')}</div>`:'<div class="empty">No tickets yet. Go book an event!</div>')},
+ '#/admin':async()=>{
+  app.innerHTML=`<h2>Admin Panel</h2><div class="two">
+  <div class="card"><h3>➕ Create Event</h3><br><input id="n" placeholder="Event name"><input id="d" type="datetime-local">
+   <input id="v" placeholder="Venue"><input id="s" type="number" placeholder="Total seats"><button onclick="addEvent()">Create Event</button></div>
+  <div class="card"><h3>✅ Check-in</h3><br><input id="tid" placeholder="Paste Ticket ID (EH-XXXXXXXX)" onkeydown="if(event.key=='Enter')checkin()">
+   <button onclick="checkin()">Verify Ticket</button><div id="res"></div></div></div>`},
+ '#/dashboard':async()=>{
+  const s=await api('/stats');
+  app.innerHTML=`<h2>Dashboard</h2><div class="stats"><div class="stat s1"><b>${s.totalEvents}</b>Events</div>
+  <div class="stat s2"><b>${s.totalTickets}</b>Tickets Booked</div><div class="stat s3"><b>${s.checkedIn}</b>Checked In</div></div>
+  <div class="card"><h3>Bookings per event</h3>${s.events.map(e=>`<div class="bar"><i style="width:${e.booked/e.seats*100}%"></i></div>
+  <p class="mut">${e.name} — ${e.booked}/${e.seats}</p>`).join('')||'<p class="mut">No data</p>'}</div>`}
+};
+let reg=false;
+function authView(){
+  app.innerHTML=`<div class="card auth"><h2>${reg?'Create account':'Welcome back'}</h2><br>
+  ${reg?'<input id="nm" placeholder="Full name">':''}<input id="em" placeholder="Email"><input id="pw" type="password" placeholder="Password">
+  <button style="width:100%" onclick="submitAuth()">${reg?'Register':'Login'}</button>
+  <span class="link" onclick="reg=!reg;authView()">${reg?'Have an account? Login':'New student? Register'}</span>
+  <p class="mut" style="text-align:center;margin-top:12px">Admin: admin@eventhive.com / admin123</p></div>`}
+async function submitAuth(){
+  try{const d=await api(reg?'/register':'/login','POST',{name:$('#nm')?.value,email:$('#em').value,password:$('#pw').value});
+   token=d.token;user=d.user;localStorage.token=token;localStorage.user=JSON.stringify(user);
+   location.hash=user.role=='admin'?'#/dashboard':'#/events';toast('Welcome, '+user.name)}catch(e){toast(e.message)}}
+async function book(id){try{const r=await api(`/events/${id}/book`,'POST');toast('Booked! Ticket '+r.ticketId);location.hash='#/tickets'}catch(e){toast(e.message)}}
+async function addEvent(){try{await api('/events','POST',{name:$('#n').value,date:$('#d').value,venue:$('#v').value,seats:$('#s').value});
+  toast('Event created');['n','d','v','s'].forEach(i=>$('#'+i).value='')}catch(e){toast(e.message)}}
+async function checkin(){const r=await api('/checkin','POST',{ticketId:$('#tid').value});
+  $('#res').innerHTML=`<div class="res ${r.status}">${r.status=='valid'?'✅':r.status=='used'?'⚠️':'❌'} ${r.message}${r.holder?`<br><small>${r.holder} · ${r.event}</small>`:''}</div>`}
+
+async function render(){
+  if(!location.hash)location.hash=user?'#/events':'#/login';
+  let h=location.hash;
+  if(!user&&h!='#/login')return location.hash='#/login';
+  if(user&&h=='#/login')return location.hash='#/events';
+  if(!routes[h])return location.hash='#/events';
+  if(user&&user.role!='admin'&&(h=='#/admin'||h=='#/dashboard'))return location.hash='#/events';
+  if(user&&user.role=='admin'&&h=='#/tickets')return location.hash='#/dashboard';
+  navbar();try{await routes[h]()}catch(e){toast(e.message)}}
+addEventListener('hashchange',render);render();
+</script></body></html>
