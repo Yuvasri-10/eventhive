@@ -90,6 +90,22 @@ pipeline {
 
                         $password = $env:DH_PASS.Trim()
 
+                        # TEMPORARY DIAGNOSTIC: never print the token itself.
+                        $sha = [Security.Cryptography.SHA256]::Create()
+                        try {
+                            $bytes = [Text.Encoding]::UTF8.GetBytes($password)
+                            $hash = [BitConverter]::ToString(
+                                $sha.ComputeHash($bytes)
+                            ).Replace('-', '')
+
+                            Write-Output "Docker Hub username: $($env:DH_USER)"
+                            Write-Output "Token length: $($password.Length)"
+                            Write-Output "Token fingerprint: $hash"
+                        }
+                        finally {
+                            $sha.Dispose()
+                        }
+
                         $psi = New-Object System.Diagnostics.ProcessStartInfo
                         $psi.FileName = $env:DOCKER
                         $psi.Arguments = "login --username `"$env:DH_USER`" --password-stdin"
@@ -122,7 +138,7 @@ pipeline {
                         }
 
                         if ($proc.ExitCode -ne 0) {
-                            throw "Docker Hub login failed. Check the Jenkins credential."
+                            throw "Docker Hub login failed. Check the credential fingerprint and Docker Hub token."
                         }
 
                         Write-Output "Docker Hub login succeeded."
