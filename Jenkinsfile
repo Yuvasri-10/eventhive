@@ -88,70 +88,33 @@ pipeline {
                             throw "Docker Hub credentials are empty."
                         }
 
-                        $password = $env:DH_PASS.Trim()
+                        # Authenticate without printing the password.
+                        $env:DH_PASS |
+                            & $env:DOCKER login `
+                                --username $env:DH_USER `
+                                --password-stdin
 
-                        # TEMPORARY DIAGNOSTIC: never print the token itself.
-                        $sha = [Security.Cryptography.SHA256]::Create()
-                        try {
-                            $bytes = [Text.Encoding]::UTF8.GetBytes($password)
-                            $hash = [BitConverter]::ToString(
-                                $sha.ComputeHash($bytes)
-                            ).Replace('-', '')
-
-                            Write-Output "Docker Hub username: $($env:DH_USER)"
-                            Write-Output "Token length: $($password.Length)"
-                            Write-Output "Token fingerprint: $hash"
-                        }
-                        finally {
-                            $sha.Dispose()
-                        }
-
-                        $psi = New-Object System.Diagnostics.ProcessStartInfo
-                        $psi.FileName = $env:DOCKER
-                        $psi.Arguments = "login --username `"$env:DH_USER`" --password-stdin"
-                        $psi.UseShellExecute = $false
-                        $psi.CreateNoWindow = $true
-                        $psi.RedirectStandardInput = $true
-                        $psi.RedirectStandardOutput = $true
-                        $psi.RedirectStandardError = $true
-
-                        $proc = New-Object System.Diagnostics.Process
-                        $proc.StartInfo = $psi
-                        [void]$proc.Start()
-
-                        $stdoutTask = $proc.StandardOutput.ReadToEndAsync()
-                        $stderrTask = $proc.StandardError.ReadToEndAsync()
-
-                        $proc.StandardInput.WriteLine($password)
-                        $proc.StandardInput.Close()
-                        $proc.WaitForExit()
-
-                        $stdout = $stdoutTask.Result
-                        $stderr = $stderrTask.Result
-
-                        if ($stdout) {
-                            Write-Output $stdout
-                        }
-
-                        if ($stderr) {
-                            Write-Output $stderr
-                        }
-
-                        if ($proc.ExitCode -ne 0) {
-                            throw "Docker Hub login failed. Check the credential fingerprint and Docker Hub token."
+                        if ($LASTEXITCODE -ne 0) {
+                            throw "Docker Hub login failed. Check the Jenkins credential and Docker Hub access token."
                         }
 
                         Write-Output "Docker Hub login succeeded."
 
+                        # Push the build-specific image.
                         & $env:DOCKER push "$env:IMAGE_NAME`:$env:IMAGE_TAG"
+
                         if ($LASTEXITCODE -ne 0) {
                             throw "Failed to push the build-tagged image."
                         }
 
+                        # Push the latest tag.
                         & $env:DOCKER push "$env:IMAGE_NAME`:latest"
+
                         if ($LASTEXITCODE -ne 0) {
                             throw "Failed to push the latest image."
                         }
+
+                        Write-Output "Both Docker images were pushed successfully."
                     '''
                 }
             }
