@@ -1,0 +1,9 @@
+node_modules
+.git
+.github
+.env
+jenkins
+ansible
+Jenkinsfile
+*.md
+docker-compose*.yml

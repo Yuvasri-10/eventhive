@@ -1,0 +1,8 @@
+---
+- name: Deploy EventHive
+  hosts: webservers
+  become: "{{ use_become }}"
+  roles:
+    - role: docker
+      when: install_docker | bool
+    - role: eventhive

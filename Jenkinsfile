@@ -1,65 +1,126 @@
 pipeline {
   agent any
+
   options {
     timestamps()
     disableConcurrentBuilds()
+    buildDiscarder(logRotator(numToKeepStr: '10'))
   }
+
+  triggers {
+    githubPush()
+  }
+
+  parameters {
+    choice(
+      name: 'DEPLOY_ENV',
+      choices: ['production', 'local'],
+      description: 'Environment for Ansible deployment'
+    )
+    booleanParam(
+      name: 'SKIP_DEPLOY',
+      defaultValue: false,
+      description: 'Build and push only; skip deployment'
+    )
+  }
+
   environment {
-    IMAGE_NAME = 'eventhive'
+    IMAGE_NAME = 'yuvana10/eventhive'
+    ANSIBLE_FORCE_COLOR = 'true'
   }
+
   stages {
     stage('Checkout') {
-      steps { checkout scm }
+      steps {
+        checkout scm
+        script {
+          env.IMAGE_TAG = "${env.BUILD_NUMBER}-${sh(returnStdout: true, script: 'git rev-parse --short HEAD').trim()}"
+        }
+        echo "Building ${env.IMAGE_NAME}:${env.IMAGE_TAG}"
+      }
     }
-    stage('Install and test') {
+
+    stage('Install and Test') {
       steps {
         sh 'node --version'
+        sh 'npm --version'
         sh 'npm install'
         sh 'npm test'
       }
     }
-    stage('Build Docker image') {
+
+    stage('Build Docker Image') {
       steps {
-        sh 'docker build -t ${IMAGE_NAME}:${BUILD_NUMBER} .'
+        sh 'docker build -t $IMAGE_NAME:$IMAGE_TAG -t $IMAGE_NAME:latest .'
       }
     }
-    stage('Login and push to Docker Hub') {
-      when { expression { env.BRANCH_NAME == 'main' || env.GIT_BRANCH == 'origin/main' || env.GIT_BRANCH == 'main' } }
+
+    stage('Push to Docker Hub') {
+      when {
+        expression { env.GIT_BRANCH ==~ /(origin\/)?main/ }
+      }
       steps {
-        withCredentials([usernamePassword(credentialsId: 'dockerhub-credentials',
-          usernameVariable: 'DOCKERHUB_USERNAME', passwordVariable: 'DOCKERHUB_TOKEN')]) {
+        withCredentials([
+          usernamePassword(
+            credentialsId: 'dockerhub-creds',
+            usernameVariable: 'DH_USER',
+            passwordVariable: 'DH_PASS'
+          )
+        ]) {
           sh '''
-            echo "$DOCKERHUB_TOKEN" | docker login -u "$DOCKERHUB_USERNAME" --password-stdin
-            docker tag eventhive:${BUILD_NUMBER} "$DOCKERHUB_USERNAME/eventhive:${BUILD_NUMBER}"
-            docker tag eventhive:${BUILD_NUMBER} "$DOCKERHUB_USERNAME/eventhive:latest"
-            docker push "$DOCKERHUB_USERNAME/eventhive:${BUILD_NUMBER}"
-            docker push "$DOCKERHUB_USERNAME/eventhive:latest"
-            docker logout
+            echo "$DH_PASS" | docker login -u "$DH_USER" --password-stdin
+            docker push "$IMAGE_NAME:$IMAGE_TAG"
+            docker push "$IMAGE_NAME:latest"
           '''
         }
       }
     }
+
     stage('Deploy with Ansible') {
-      when { expression { env.BRANCH_NAME == 'main' || env.GIT_BRANCH == 'origin/main' || env.GIT_BRANCH == 'main' } }
+      when {
+        allOf {
+          expression { env.GIT_BRANCH ==~ /(origin\/)?main/ }
+          expression { !params.SKIP_DEPLOY }
+        }
+      }
       steps {
-        withCredentials([
-          usernamePassword(credentialsId: 'dockerhub-credentials',
-            usernameVariable: 'DOCKERHUB_USERNAME', passwordVariable: 'DOCKERHUB_TOKEN'),
-          sshUserPrivateKey(credentialsId: 'eventhive-deploy-ssh',
-            keyFileVariable: 'DEPLOY_KEY', usernameVariable: 'DEPLOY_USER'),
-          string(credentialsId: 'eventhive-jwt-secret', variable: 'EVENTHIVE_JWT_SECRET')
-        ]) {
-          sh '''
-            test -n "$DEPLOY_HOST" || (echo "Set DEPLOY_HOST in Jenkins environment" && exit 1)
-            ansible-playbook -i "$DEPLOY_HOST," ansible/deploy.yml \\
-              --user "$DEPLOY_USER" --private-key "$DEPLOY_KEY" \\
-              -e "dockerhub_username=$DOCKERHUB_USERNAME image_tag=$BUILD_NUMBER"
-          '''
+        dir('ansible') {
+          withCredentials([
+            string(
+              credentialsId: 'eventhive-jwt-secret',
+              variable: 'JWT_SECRET'
+            )
+          ]) {
+            script {
+              if (params.DEPLOY_ENV == 'production') {
+                sshagent(credentials: ['ansible-ssh-key']) {
+                  sh '''
+                    ansible-playbook -i inventory/production.ini playbook.yml \
+                      -e "jwt_secret=$JWT_SECRET"
+                  '''
+                }
+              } else {
+                sh '''
+                  ansible-playbook -i inventory/local.ini playbook.yml \
+                    -e "jwt_secret=$JWT_SECRET"
+                '''
+              }
+            }
+          }
         }
       }
     }
   }
+
   post {
-    always { sh 'docker image rm eventhive:${BUILD_NUMBER} 2>/dev/null || true' }
+    always {
+      sh 'docker logout || true'
+    }
+    success {
+      echo "Pipeline completed for ${env.IMAGE_NAME}:${env.IMAGE_TAG}"
+    }
+    failure {
+      echo 'Pipeline failed - check the stage logs.'
+    }
   }
 }

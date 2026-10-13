@@ -1,0 +1,17 @@
+# Run Jenkins:  cd jenkins && docker compose up -d --build
+services:
+  jenkins:
+    build: .
+    container_name: jenkins
+    restart: unless-stopped
+    user: root            # needed to use the host Docker socket (see docs/DEVOPS.md)
+    ports:
+      - "8080:8080"
+      - "50000:50000"
+    volumes:
+      - jenkins_home:/var/jenkins_home
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Same path inside and outside so the "local" Ansible deploy can bind-mount files
+      - /opt/eventhive:/opt/eventhive
+volumes:
+  jenkins_home:

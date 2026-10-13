@@ -1,0 +1,46 @@
+---
+- name: Refuse to deploy without a JWT secret
+  ansible.builtin.assert:
+    that: jwt_secret | length >= 8
+    fail_msg: "JWT_SECRET is missing or too short (set the eventhive-jwt-secret credential in Jenkins)."
+  no_log: true
+
+- name: Create application directory
+  ansible.builtin.file:
+    path: "{{ app_dir }}"
+    state: directory
+    mode: "0755"
+
+- name: Copy Prometheus config
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../prometheus.yml"
+    dest: "{{ app_dir }}/prometheus.yml"
+    mode: "0644"
+
+- name: Render docker-compose.yml
+  ansible.builtin.template:
+    src: docker-compose.yml.j2
+    dest: "{{ app_dir }}/docker-compose.yml"
+    mode: "0600"   # contains secrets
+  no_log: true
+
+- name: Pull new images and (re)start the stack
+  community.docker.docker_compose_v2:
+    project_src: "{{ app_dir }}"
+    project_name: eventhive
+    pull: always
+    state: present
+    remove_orphans: true
+
+- name: Wait until the app container is healthy
+  ansible.builtin.command: >-
+    docker inspect --format='{% raw %}{{.State.Health.Status}}{% endraw %}' eventhive-app
+  register: app_health
+  until: app_health.stdout == 'healthy'
+  retries: 20
+  delay: 5
+  changed_when: false
+
+- name: Report deployed version
+  ansible.builtin.debug:
+    msg: "EventHive {{ image_tag }} is healthy on port {{ app_port }}"
