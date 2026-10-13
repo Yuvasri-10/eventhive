@@ -29,6 +29,7 @@ pipeline {
     environment {
         IMAGE_NAME = 'yuvana10/eventhive'
         DOCKER = 'C:\\Users\\yuvas\\AppData\\Local\\Programs\\DockerDesktop\\resources\\bin\\docker.exe'
+        DOCKER_HOST = 'npipe:////./pipe/docker_engine'
     }
 
     stages {
@@ -60,7 +61,7 @@ pipeline {
 
         stage('Build Docker Image') {
             steps {
-                bat '"%DOCKER%" build -t %IMAGE_NAME%:%IMAGE_TAG% -t %IMAGE_NAME%:latest .'
+                bat '"%DOCKER%" --host "%DOCKER_HOST%" build -t %IMAGE_NAME%:%IMAGE_TAG% -t %IMAGE_NAME%:latest .'
             }
         }
 
@@ -88,27 +89,33 @@ pipeline {
                             throw "Docker Hub credentials are empty."
                         }
 
-                        # Authenticate without printing the password.
+                        # Use the Docker engine pipe verified from Jenkins.
                         $env:DH_PASS |
-                            & $env:DOCKER login `
+                            & $env:DOCKER `
+                                --host $env:DOCKER_HOST `
+                                login `
                                 --username $env:DH_USER `
                                 --password-stdin
 
                         if ($LASTEXITCODE -ne 0) {
-                            throw "Docker Hub login failed. Check the Jenkins credential and Docker Hub access token."
+                            throw "Docker Hub login failed."
                         }
 
                         Write-Output "Docker Hub login succeeded."
 
                         # Push the build-specific image.
-                        & $env:DOCKER push "$env:IMAGE_NAME`:$env:IMAGE_TAG"
+                        & $env:DOCKER `
+                            --host $env:DOCKER_HOST `
+                            push "$env:IMAGE_NAME`:$env:IMAGE_TAG"
 
                         if ($LASTEXITCODE -ne 0) {
                             throw "Failed to push the build-tagged image."
                         }
 
                         # Push the latest tag.
-                        & $env:DOCKER push "$env:IMAGE_NAME`:latest"
+                        & $env:DOCKER `
+                            --host $env:DOCKER_HOST `
+                            push "$env:IMAGE_NAME`:latest"
 
                         if ($LASTEXITCODE -ne 0) {
                             throw "Failed to push the latest image."
@@ -143,7 +150,11 @@ pipeline {
 
     post {
         always {
-            bat '"%DOCKER%" logout || exit /b 0'
+            powershell '''
+                $ErrorActionPreference = 'Continue'
+                & $env:DOCKER --host $env:DOCKER_HOST logout
+                exit 0
+            '''
         }
 
         success {
