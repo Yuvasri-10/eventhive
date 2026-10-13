@@ -1,0 +1,13 @@
+{
+  "name": "eventhive",
+  "version": "1.0.0",
+  "main": "server.js",
+  "scripts": { "start": "node server.js", "test": "node --check server.js" },
+  "dependencies": {
+    "express": "^4.19.2",
+    "jsonwebtoken": "^9.0.2",
+    "mongoose": "^8.4.0",
+    "prom-client": "^15.1.2",
+    "qrcode": "^1.5.3"
+  }
+}

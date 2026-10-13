@@ -1,0 +1,63 @@
+---
+- name: Deploy EventHive using Docker Compose
+  hosts: all
+  become: true
+  vars:
+    app_dir: /opt/eventhive
+  tasks:
+    - name: Require a strong JWT secret
+      ansible.builtin.assert:
+        that:
+          - lookup('ansible.builtin.env', 'EVENTHIVE_JWT_SECRET') | length >= 32
+        fail_msg: "Create Jenkins secret-text credential eventhive-jwt-secret with at least 32 characters."
+
+    - name: Install Docker and Docker Compose plugin
+      ansible.builtin.apt:
+        name:
+          - docker.io
+          - docker-compose-v2
+        state: present
+        update_cache: true
+
+    - name: Ensure Docker service is enabled and running
+      ansible.builtin.service:
+        name: docker
+        state: started
+        enabled: true
+
+    - name: Create application directory
+      ansible.builtin.file:
+        path: "{{ app_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Copy production Compose file
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../docker-compose.prod.yml"
+        dest: "{{ app_dir }}/docker-compose.yml"
+        mode: "0644"
+
+    - name: Configure deployment image and secret
+      ansible.builtin.copy:
+        dest: "{{ app_dir }}/.env"
+        mode: "0600"
+        content: |
+          DOCKERHUB_USERNAME={{ dockerhub_username }}
+          IMAGE_TAG={{ image_tag | default('latest') }}
+          JWT_SECRET={{ lookup('ansible.builtin.env', 'EVENTHIVE_JWT_SECRET') }}
+
+    - name: Pull and start EventHive containers
+      ansible.builtin.command:
+        cmd: docker compose up -d
+        chdir: "{{ app_dir }}"
+      register: compose_result
+      changed_when: true
+
+    - name: Wait for EventHive health endpoint
+      ansible.builtin.uri:
+        url: http://127.0.0.1:3000/health
+        status_code: 200
+      register: health_result
+      retries: 15
+      delay: 4
+      until: health_result.status == 200
