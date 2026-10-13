@@ -67,5 +67,3 @@ pipeline {
     always  { sh 'docker image rm eventhive:${BUILD_NUMBER} 2>/dev/null || true' }
   }
 }
- 
-Claude finished the response
