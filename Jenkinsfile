@@ -79,6 +79,8 @@ pipeline {
                         passwordVariable: 'DH_PASS'
                     )
                 ]) {
+                    echo "Docker Hub username supplied to Jenkins: ${env.DH_USER}"
+
                     powershell '''
                         $ErrorActionPreference = 'Stop'
 
